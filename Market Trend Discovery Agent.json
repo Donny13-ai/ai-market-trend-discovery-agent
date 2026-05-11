@@ -1,0 +1,2239 @@
+{
+  "name": "Market Trend Discovery Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// STAGE 1: Input Parser\n// Extracts category, Amazon.com URLs, and validates input\n\nconst input = $input.first().json.chatInput || '';\n\n// Define valid categories\nconst categories = [\n  { key: 'area_rug', patterns: ['area rug', 'area rugs'] },\n  { key: 'outdoor_rug', patterns: ['outdoor rug', 'outdoor rugs', 'patio rug'] },\n  { key: 'hallway_runner', patterns: ['hallway runner', 'runner rug', 'hall runner', 'runners'] },\n  { key: 'shag_rug', patterns: ['shag rug', 'shag rugs', 'shaggy rug'] }\n];\n\n// Find selected category\nlet selectedCategory = null;\nlet categoryKey = null;\nconst lowerInput = input.toLowerCase();\n\nfor (const cat of categories) {\n  for (const pattern of cat.patterns) {\n    if (lowerInput.includes(pattern)) {\n      selectedCategory = cat.patterns[0].split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');\n      categoryKey = cat.key;\n      break;\n    }\n  }\n  if (selectedCategory) break;\n}\n\n// Extract Amazon.com URLs ONLY (reject other Amazon domains)\nconst amazonComRegex = /(https?:\\/\\/(?:www\\.)?amazon\\.com\\/[^\\s,]+)/gi;\nconst allAmazonUrls = input.match(amazonComRegex) || [];\n\n// Check for invalid Amazon domains (for warning)\nconst invalidAmazonRegex = /(https?:\\/\\/(?:www\\.)?amazon\\.(?!com)[a-z.]+\\/[^\\s,]+)/gi;\nconst invalidUrls = input.match(invalidAmazonRegex) || [];\n\n// Classify URLs into products vs collections\nconst productUrls = [];\nconst collectionUrls = [];\n\nallAmazonUrls.forEach(url => {\n  const cleanUrl = url.trim().replace(/,+$/, '');\n  \n  if (/\\/dp\\/|\\/gp\\/product\\//.test(cleanUrl)) {\n    productUrls.push(cleanUrl);\n  } else if (/\\/s\\?|\\/s\\/|\\/b\\/|\\/b\\?|\\/zgbs\\//.test(cleanUrl)) {\n    collectionUrls.push(cleanUrl);\n  }\n});\n\n// Extract optional trend focus\nconst trendFocusMatch = input.match(/focus[:\\s]+[\"']?([^\"'\\n,]+)[\"']?/i);\nconst trendFocus = trendFocusMatch ? trendFocusMatch[1].trim() : null;\n\n// Determine if input is valid\nconst hasCategory = selectedCategory !== null;\nconst hasUrls = productUrls.length > 0 || collectionUrls.length > 0;\nconst isValid = hasCategory && hasUrls;\n\nreturn [{\n  json: {\n    rawInput: input,\n    selectedCategory: selectedCategory,\n    categoryKey: categoryKey,\n    productUrls: productUrls,\n    collectionUrls: collectionUrls,\n    invalidUrls: invalidUrls,\n    trendFocus: trendFocus,\n    hasCategory: hasCategory,\n    hasUrls: hasUrls,\n    isValid: isValid,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        608
+      ],
+      "id": "3a240b26-a2fa-418a-8b39-d1559a4aad50",
+      "name": "Input Parser1"
+    },
+    {
+      "parameters": {
+        "content": "STAGE 1: INPUT & ROUTING\n",
+        "height": 80,
+        "width": 150
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        608,
+        416
+      ],
+      "typeVersion": 1,
+      "id": "bcb71b2d-1c7a-4453-8895-9e6aeb553389",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "f3641126-eb34-4fa0-ad02-1c7c6670b703",
+      "name": "what chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        608
+      ],
+      "webhookId": "3d8d2322-bfba-4e4c-912d-38a465aa5e87"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9dfeaa51-a109-41f9-913a-ec3dfdbf6ab4",
+              "leftValue": "={{ $json.isValid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        608
+      ],
+      "id": "810cc36f-7ab8-4fa8-beee-8eb4ac213437",
+      "name": "Category validator1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Error Response for invalid input\nconst input = $input.first().json;\n\nlet errorParts = [];\n\nif (!input.hasCategory) {\n  errorParts.push('**Category not detected.** Please specify one of:\\n- Area Rug\\n- Outdoor Rug\\n- Hallway Runner\\n- Shag Rug');\n}\n\nif (!input.hasUrls) {\n  errorParts.push('**No Amazon.com URLs found.** Please provide at least one Amazon product or collection URL.');\n}\n\nif (input.invalidUrls && input.invalidUrls.length > 0) {\n  errorParts.push(`**Note:** ${input.invalidUrls.length} non-US Amazon URL(s) were ignored. Please use amazon.com links only.`);\n}\n\nlet errorMsg = 'I could not process your request:\\n\\n' + errorParts.join('\\n\\n');\nerrorMsg += '\\n\\n---\\n\\n**Example input:**\\n';\nerrorMsg += 'Category: Outdoor Rug\\n';\nerrorMsg += 'https://www.amazon.com/s?k=outdoor+rugs\\n';\nerrorMsg += 'https://www.amazon.com/dp/B08XYZ1234';\n\nreturn [{ json: { error: true, message: errorMsg } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        896
+      ],
+      "id": "715b2537-0b9f-4d28-be9f-a1611be47207",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Collection URLs - split into individual items\nconst collectionUrls = $input.first().json.collectionUrls || [];\n\nif (collectionUrls.length === 0) {\n  return [{ json: { url: null, type: 'no_collections' } }];\n}\n\nreturn collectionUrls.map(url => ({ json: { url, type: 'collection' } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        512
+      ],
+      "id": "d3d5e4ef-6911-4a0a-b430-132812fac73f",
+      "name": "Prepare Collection List"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fd3c5072-ee91-4e2d-8395-7942e9e715ec",
+              "leftValue": "={{ $json.url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        512
+      ],
+      "id": "b4cb2ff5-4e00-456b-848c-73e61a8c3005",
+      "name": "Is List Empty?"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.amazon.com/s?k=area+rug",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": " i18n-prefs=USD; lc-main=en_US; session-id=141-8209501-9981461; session-id-time=2082787201l; ubid-main=134-5719883-5851066"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        512
+      ],
+      "id": "dd0d3a78-e5f5-4c87-8f21-6af423196c23",
+      "name": "HTTP Request",
+      "retryOnFail": true,
+      "alwaysOutputData": true,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "dataPropertyName": "error.message",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "product_links",
+              "cssSelector": "div div a[href*='/dp/']",
+              "returnValue": "attribute",
+              "attribute": "herf",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        1344,
+        512
+      ],
+      "id": "25f4bd1d-a361-4b47-9150-84e404d439d8",
+      "name": "HTML",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clean and deduplicate product URLs from collection (matching v1 approach)\nconst links = $input.first().json.product_links || [];\n\n// Remove duplicates from product_links array\nconst uniqueLinks = [...new Set(links)];\n\n// Add base URL to make complete URLs\nconst fullUrls = uniqueLinks.map(link => {\n  if (link.startsWith('/')) {\n    return `https://www.amazon.com${link}`;\n  }\n  return link;\n});\n\n// Limit to 10 products like v1\nconst limitedUrls = fullUrls.slice(0, 10);\n\nif (limitedUrls.length === 0) {\n  return [{ json: { url: null, type: 'no_products_found', source: 'collection' } }];\n}\n\n// Split URLs into individual items for processing one by one\nreturn limitedUrls.map(url => ({ json: { url, type: 'product', source: 'collection' } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        512
+      ],
+      "id": "a442cb02-751b-4888-aebe-d3bb02cb61ee",
+      "name": "remove duplicate links"
+    },
+    {
+      "parameters": {
+        "amount": 1.5
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1792,
+        512
+      ],
+      "id": "9923e2c3-9ab1-4f51-98b5-66e8c44d15a4",
+      "name": "pause for safety",
+      "webhookId": "780f7a85-619d-4117-840c-8857b8925565"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "i18n-prefs=USD; lc-main=en_US; session-id=141-8209501-9981461; session-id-time=2082787201l; ubid-main=134-5719883-5851066"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2016,
+        512
+      ],
+      "id": "44dc76d3-5663-4585-b24b-13b5a0cb85aa",
+      "name": "Visit product page",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\n\nfor (const item of $input.all()) {\n  const url = item.json.url || item.json.canonicalUrl || 'Amazon Product';\n\n  results.push({\n    json: {\n      url,\n      name: item.json.name || 'Amazon Product',\n      price: item.json.price || 'Price unavailable',\n      details: item.json.details || [\n        'Product details unavailable because Amazon blocked automated scraping.'\n      ],\n      pattern: item.json.pattern || '',\n      scraped_at: new Date().toISOString(),\n      source: 'amazon',\n      note: 'Fallback data used because Amazon blocked the product page scrape.'\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        512
+      ],
+      "id": "d4212559-60b7-41e8-9f95-1e70f7b6a2b5",
+      "name": "read item details"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Direct Product URLs - split into individual items\nconst productUrls = $input.first().json.productUrls || [];\n\nif (productUrls.length === 0) {\n  return [{ json: { url: null, type: 'no_products' } }];\n}\n\nreturn productUrls.map(url => ({ json: { url, type: 'direct_product' } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        704
+      ],
+      "id": "7a9bfbec-df93-4a3e-bef4-502b8ce6d86b",
+      "name": "Prepare Direct Links"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "091ef695-c856-4be0-822e-7f0ebff89466",
+              "leftValue": "={{ $json.url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        704
+      ],
+      "id": "0e641be7-de0d-4bdf-8cba-aa4b4c1f207c",
+      "name": "Do We Have Direct Links?"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        704
+      ],
+      "id": "3ecd09f2-d2a1-474a-b30a-d44afd9a413d",
+      "name": "Visit Direct Product Page",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\n\nfor (const item of $input.all()) {\n  const html =\n    item.json.body ||\n    item.json.data ||\n    item.json.error?.message ||\n    '';\n\n  const originalUrl =\n    item.json.url ||\n    item.json.inputUrl ||\n    item.json.request?.url ||\n    'Amazon Product';\n\n  let name = 'Amazon Product';\n  let price = 'Price unavailable';\n  let details = [];\n\n  // Try to get page title\n  const titleMatch = html.match(/<title[^>]*>(.*?)<\\/title>/i);\n  if (titleMatch && titleMatch[1]) {\n    name = titleMatch[1]\n      .replace(/Amazon\\.com[:\\s-]*/i, '')\n      .replace(/\\s+/g, ' ')\n      .trim();\n  }\n\n  // Try to get product title\n  const productTitleMatch = html.match(/id=[\"']productTitle[\"'][^>]*>(.*?)<\\/[^>]+>/i);\n  if (productTitleMatch && productTitleMatch[1]) {\n    name = productTitleMatch[1]\n      .replace(/<[^>]*>/g, '')\n      .replace(/\\s+/g, ' ')\n      .trim();\n  }\n\n  // Try to get price\n  const priceMatch = html.match(/class=[\"'][^\"']*a-price-whole[^\"']*[\"'][^>]*>(.*?)<\\/span>/i);\n  if (priceMatch && priceMatch[1]) {\n    price = priceMatch[1]\n      .replace(/<[^>]*>/g, '')\n      .replace(/\\s+/g, ' ')\n      .trim();\n  }\n\n  // Basic fallback details\n  details = [\n    'Product details collected from Amazon page when available.',\n    'If Amazon blocks scraping, fallback data is used so workflow continues.'\n  ];\n\n  results.push({\n    url: originalUrl,\n    name,\n    price,\n    details,\n    pattern: '',\n    source: 'amazon',\n    scraped_at: new Date().toISOString()\n  });\n}\n\nreturn [\n  {\n    json: {\n      amazonProducts: results,\n      products: results,\n      total_scraped: results.length,\n      successful_scrapes: results.length,\n      failed_scrapes: 0,\n      note: 'Cheerio removed. Regex/fallback parser used for n8n Cloud compatibility.',\n      batch_scraped_at: new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        704
+      ],
+      "id": "869abb04-634d-444f-80bf-ba0a19cc0f3c",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1568,
+        704
+      ],
+      "id": "bb56bccf-cb7f-47dc-bf5e-1d6fbdfeff7a",
+      "name": "Merge Amazon Products (Collection + Direct)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine all Amazon product data\nconst allItems = $input.all();\nlet allProducts = [];\n\nfor (const item of allItems) {\n  if (item.json.products && Array.isArray(item.json.products)) {\n    allProducts = allProducts.concat(item.json.products);\n  }\n}\n\n// Deduplicate by URL\nconst seen = new Set();\nconst uniqueProducts = allProducts.filter(p => {\n  if (seen.has(p.url)) return false;\n  seen.add(p.url);\n  return true;\n});\n\nreturn [{\n  json: {\n    amazonProducts: uniqueProducts,\n    totalProducts: uniqueProducts.length,\n    scrapedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        704
+      ],
+      "id": "f2d10630-eedc-49ad-8422-1b5d63e867c9",
+      "name": "Deduplicate + Combine Final Amazon Product List"
+    },
+    {
+      "parameters": {
+        "url": "http://34.196.186.128:8000/api/trends/instagram",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "category",
+              "value": "={{ $json.categoryKey }}"
+            },
+            {
+              "name": "limit",
+              "value": "20"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        320
+      ],
+      "id": "b342980c-8c66-44a2-8f1c-7b87e1ea3e84",
+      "name": "Fetch Instagram"
+    },
+    {
+      "parameters": {
+        "url": "http://34.196.186.128:8000/api/trends/pinterest",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "=category",
+              "value": "={{ $('Get Category Key').item.json.categoryKey }}"
+            },
+            {
+              "name": "limit",
+              "value": "20"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        128
+      ],
+      "id": "2e975644-e27c-4fa7-b1cc-8161e0b44f9d",
+      "name": "fetch pintrest"
+    },
+    {
+      "parameters": {
+        "url": "http://34.196.186.128:8000/api/trends/blogs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "category",
+              "value": "={{ $('Get Category Key').item.json.categoryKey }}"
+            },
+            {
+              "name": "limit",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        -64
+      ],
+      "id": "99fee471-12a8-49f8-a587-924694839524",
+      "name": "fetch blogs"
+    },
+    {
+      "parameters": {
+        "url": "http://34.196.186.128:8000/api/trends/blogs",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "category ",
+              "value": "={{ $('Get Category Key').item.json.categoryKey }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1120,
+        -256
+      ],
+      "id": "3a1e2461-1255-4ec2-94bb-b96fc21353af",
+      "name": "fetch market data"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get category key for Extern API calls\nconst categoryKey = $('Input Parser1').first().json.categoryKey;\nconst selectedCategory = $('Input Parser1').first().json.selectedCategory;\n\nreturn [{\n  json: {\n    categoryKey: categoryKey || 'area_rug',\n    selectedCategory: selectedCategory || 'Area Rug'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        16
+      ],
+      "id": "fc8e3059-aeef-4729-b878-d30c66511377",
+      "name": "Get Category Key"
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1344,
+        0
+      ],
+      "id": "af56b3a7-2103-4c38-bc6a-96ce7b5c2338",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge all social data from Extern API (with image support)\nlet instagram = { items: [] };\nlet pinterest = { items: [] };\nlet blogs = { items: [] };\n\ntry {\n  instagram = $('Fetch Instagram').first().json || { items: [] };\n} catch (e) { instagram = { items: [] }; }\n\ntry {\n  pinterest = $('Fetch Pinterest').first().json || { items: [] };\n} catch (e) { pinterest = { items: [] }; }\n\ntry {\n  blogs = $('Fetch Blogs').first().json || { items: [] };\n} catch (e) { blogs = { items: [] }; }\n\n// Extract images for analysis (limit to 2-3 per source)\nconst extractImages = (items, source, limit = 3) => {\n  return (items || [])\n    .filter(item => item.image_base64)\n    .slice(0, limit)\n    .map(item => ({\n      source: source,\n      id: item.id,\n      caption: item.caption || '',\n      image_base64: item.image_base64,\n      mime_type: item.image_mime_type || 'image/jpeg'\n    }));\n};\n\nconst socialImages = [\n  ...extractImages(instagram.items, 'instagram', 3),\n  ...extractImages(pinterest.items, 'pinterest', 3)\n];\n\nreturn [{\n  json: {\n    socialData: {\n      instagram: instagram.items || [],\n      pinterest: pinterest.items || [],\n      blogs: blogs.items || []\n    },\n    socialImages: socialImages,\n    totalSocialItems: (instagram.items?.length || 0) + (pinterest.items?.length || 0) + (blogs.items?.length || 0),\n    totalSocialImages: socialImages.length,\n    externApiStatus: {\n      instagram: instagram.items?.length > 0 ? 'success' : 'empty_or_failed',\n      pinterest: pinterest.items?.length > 0 ? 'success' : 'empty_or_failed',\n      blogs: blogs.items?.length > 0 ? 'success' : 'empty_or_failed'\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        32
+      ],
+      "id": "a0624def-07d9-41f2-b712-3b6c6c808b0f",
+      "name": "Merge Social Data1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract captions and hashtags from social data as visual trend signals\n  const socialData = $('Merge Social Data1').first().json.socialData;\n\n  const instagram = socialData?.instagram || [];\n  const pinterest = socialData?.pinterest || [];\n\n  // Combine all captions and hashtags\n  const instagramInsights = instagram.map(post => ({\n    source: 'instagram',\n    caption: post.caption || '',\n    hashtags: post.hashtags || [],\n    engagement: post.engagement || 0\n  }));\n\n  const pinterestInsights = pinterest.map(pin => ({\n    source: 'pinterest',\n    caption: pin.caption || '',\n    hashtags: pin.hashtags || [],\n    engagement: pin.engagement || 0\n  }));\n\n  const allInsights = [...instagramInsights, ...pinterestInsights];\n\n  // Extract all hashtags for trend analysis\n  const allHashtags = allInsights.flatMap(item => item.hashtags);\n  const hashtagCounts = {};\n  allHashtags.forEach(tag => {\n    hashtagCounts[tag] = (hashtagCounts[tag] || 0) + 1;\n  });\n\n  // Sort hashtags by frequency\n  const topHashtags = Object.entries(hashtagCounts)\n    .sort((a, b) => b[1] - a[1])\n    .slice(0, 20)\n    .map(([tag, count]) => ({ tag, count }));\n\n  // Combine all captions for trend keywords\n  const allCaptions = allInsights.map(item => item.caption).join(' ');\n\n  return [{\n    json: {\n      imageAnalysis: {\n        trend_summary: {\n          top_hashtags: topHashtags,\n          total_posts_analyzed: allInsights.length,\n          instagram_count: instagram.length,\n          pinterest_count: pinterest.length,\n          caption_insights: allCaptions.substring(0, 2000) // Limit length\n        },\n        source: 'social_captions_and_hashtags'\n      },\n      socialImages: allInsights,\n      analysisSuccess: true,\n      reason: 'Using social captions and hashtags for trend analysis'\n    }\n  }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        32
+      ],
+      "id": "0849e2fe-ffef-450a-bb81-081b6c25850a",
+      "name": "Merge Image Analysis"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2016,
+        32
+      ],
+      "id": "a5378865-6840-4305-b0d3-a3a17bdfd931",
+      "name": "Merge All Data1"
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2240,
+        32
+      ],
+      "id": "b2c3fcac-adce-4235-afd3-4f7262cabef8",
+      "name": "Wait2",
+      "webhookId": "4c3e69af-1aca-4bb8-8139-bcd552177a77"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=PRODUCTS TO CLASSIFY:\n{{ JSON.stringify($json.amazonProducts, null, 2) }}\n\nSELECTED CATEGORY: {{ $('Input Parser1').first().json.selectedCategory }}\nCATEGORY KEY: {{ $('Input Parser1').first().json.categoryKey }}",
+        "options": {
+          "systemMessage": "You are a rug product classifier for Wayfair's category strategy team.\n\nYour task: Analyze Amazon product data and determine if each product belongs to the SELECTED CATEGORY.\n\nCATEGORY DEFINITIONS:\n\n**Area Rug (area_rug):**\n- Movable floor covering for a specific room section\n- Sizes: Small (3'x5'), Medium (5'x8'), Large (8'x10'), XL (10'x14'+)\n- Materials: Wool, cotton, jute, polyester, polypropylene\n- NOT: wall-to-wall carpet, outdoor rugs, runners, bath/kitchen rugs\n\n**Outdoor Rug (outdoor_rug):**\n- Weather-resistant for exterior/semi-exterior spaces\n- Materials: Polypropylene, polyester, PET, synthetic blends\n- Thinner profile (~4-12mm), quick-drying\n- NOT: indoor-only, thick/plush, water-absorbent\n\n**Hallway Runner (hallway_runner):**\n- Long, narrow rug for pathways\n- Width: 2'-3', Length: 6'-14'+\n- Low to medium pile for safe walking\n- NOT: area rugs, square/round shapes, high-pile\n\n**Shag Rug (shag_rug):**\n- High-pile (above 1 inch/25mm), plush texture\n- Materials: Polyester, wool, microfiber, acrylic\n- For comfort, bedrooms, lounging areas\n- NOT: low-pile, flatweave, high-traffic rugs\n\nCLASSIFICATION RULES:\n1. Analyze product name, details, and specifications\n2. Determine if product matches the SELECTED category\n3. Mark as \"match\" if it fits, \"no_match\" if it doesn't, \"uncertain\" if unclear\n4. Consider: pile height, dimensions (runners are long/narrow), materials, intended placement\n\nOUTPUT FORMAT (JSON only, no markdown):\n{\n  \"selected_category\": \"the category user selected\",\n  \"classifications\": [\n    {\n      \"url\": \"product url\",\n      \"name\": \"product name\",\n      \"match_status\": \"match|no_match|uncertain\",\n      \"confidence\": \"high|medium|low\",\n      \"reasoning\": \"Brief explanation why it does or doesn't match\"\n    }\n  ],\n  \"summary\": {\n    \"total\": 0,\n    \"matches\": 0,\n    \"no_matches\": 0,\n    \"uncertain\": 0\n  }\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2464,
+        32
+      ],
+      "id": "703180e7-e72e-4bc7-b6d5-5a68990ca316",
+      "name": "Judge Product Category"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        2544,
+        256
+      ],
+      "id": "a5ff2b86-ff7a-4f11-94cf-0efd1787b22a",
+      "name": "Mistral Cloud Chat Model",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "5dEXAnMDTc3zhdP5",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter products to only those matching the selected category\nlet output = $input.first().json.output;\n\n// Parse AI output (handle markdown code blocks if present)\nif (typeof output === 'string') {\n  output = output.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  try {\n    output = JSON.parse(output);\n  } catch (e) {\n    return [{ json: { error: 'Failed to parse classifier output', filteredProducts: [] } }];\n  }\n}\n\nconst classifications = output.classifications || [];\nconst amazonProducts = $('Deduplicate + Combine Final Amazon Product List').first().json.amazonProducts || [];\n\n// Filter to only matching products\nconst matchingUrls = new Set(\n  classifications\n    .filter(c => c.match_status === 'match' && c.confidence !== 'low')\n    .map(c => c.url)\n);\n\nconst filteredProducts = amazonProducts\n  .filter(p => matchingUrls.has(p.url))\n  .map(p => {\n    const classification = classifications.find(c => c.url === p.url);\n    return {\n      ...p,\n      classification_reasoning: classification?.reasoning || ''\n    };\n  });\n\nreturn [{\n  json: {\n    filteredProducts: filteredProducts,\n    totalFiltered: filteredProducts.length,\n    classificationSummary: output.summary || {}\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2816,
+        32
+      ],
+      "id": "06bf9891-4518-4cae-b3e5-45d5793fadc6",
+      "name": "Remove Invalid Products"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=FILTERED PRODUCTS:\n{{ JSON.stringify($json.filteredProducts, null, 2) }}",
+        "options": {
+          "systemMessage": "You are a product attribute extraction specialist for rug market analysis.\n\nFor each rug product, extract and NORMALIZE these attributes:\n\n1. SIZE: Convert to standard format \"X'xY'\" (e.g., \"5'x8'\", \"2'x10'\")\n   - Map variants: \"5x7\" -> \"5'x7'\", \"6 by 9\" -> \"6'x9'\"\n   - For runners: emphasize length (e.g., \"2'x8'\")\n\n2. COLOR: Primary color family\n   - Options: Cream, White, Gray, Charcoal, Beige, Taupe, Brown, Blue, Navy, Teal, Green, Red, Orange, Pink, Purple, Multi, Black, Gold\n\n3. MATERIAL: Primary fiber\n   - Options: Wool, Cotton, Jute, Polyester, Polypropylene, Nylon, Viscose, Microfiber, Blend, Synthetic\n\n4. PATTERN: Visual pattern type\n   - Options: Solid, Geometric, Floral, Abstract, Medallion, Striped, Moroccan, Distressed, Braided, Textured, Oriental, Tribal, Chevron, Trellis\n\n5. STYLE: Design aesthetic\n   - Options: Modern, Traditional, Transitional, Bohemian, Farmhouse, Coastal, Minimalist, Vintage, Contemporary, Industrial, Mid-Century\n\n6. PILE_HEIGHT: Texture category\n   - Options: Flatweave, Low-pile, Medium-pile, High-pile, Shag\n\n7. PRICE_BUCKET:\n   - Under $50, $50-100, $100-200, $200-500, $500+\n\nOUTPUT FORMAT (JSON only, no markdown):\n{\n  \"products\": [\n    {\n      \"url\": \"...\",\n      \"name\": \"...\",\n      \"attributes\": {\n        \"size\": \"5'x8'\",\n        \"color\": \"Gray\",\n        \"material\": \"Polyester\",\n        \"pattern\": \"Geometric\",\n        \"style\": \"Modern\",\n        \"pile_height\": \"Low-pile\",\n        \"price_bucket\": \"$100-200\"\n      }\n    }\n  ],\n  \"summary\": {\n    \"top_sizes\": [\"5'x8'\", \"8'x10'\"],\n    \"top_colors\": [\"Gray\", \"Cream\", \"Blue\"],\n    \"top_materials\": [\"Polyester\", \"Polypropylene\"],\n    \"top_patterns\": [\"Geometric\", \"Distressed\"],\n    \"top_styles\": [\"Modern\", \"Transitional\"],\n    \"price_distribution\": {\"Under $50\": 2, \"$50-100\": 5, \"$100-200\": 8}\n  }\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        3040,
+        32
+      ],
+      "id": "17228750-81d1-42ba-b6b8-44ed6d9be809",
+      "name": "Standardize Details"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        3120,
+        256
+      ],
+      "id": "f69cd4a5-172d-4686-b290-b9bf60947acc",
+      "name": "Mistral Cloud Chat Model1",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "5dEXAnMDTc3zhdP5",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse attribute extraction output\nlet output = $input.first().json.output;\n\nif (typeof output === 'string') {\n  output = output.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  try {\n    output = JSON.parse(output);\n  } catch (e) {\n    return [{ json: { error: 'Failed to parse attributes', attributeData: null } }];\n  }\n}\n\nreturn [{\n  json: {\n    attributeData: output,\n    products: output.products || [],\n    summary: output.summary || {}\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3392,
+        32
+      ],
+      "id": "d3e0ada8-8f36-4534-819c-d3ef2780fbae",
+      "name": "Save Standardized Data"
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3616,
+        32
+      ],
+      "id": "8b72a612-b10c-43c5-8e3b-fe091126249e",
+      "name": "Wait",
+      "webhookId": "b30e4439-7239-4d82-a46a-e16a59200d34"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=CATEGORY: {{ $('Input Parser1').first().json.selectedCategory }}\n\nPRODUCT ATTRIBUTES:\n{{ JSON.stringify($json.attributeData, null, 2) }}\n\nSOCIAL DATA (text signals):\n{{ JSON.stringify({ instagram: ($('Merge Social Data1').first().json.socialData.instagram || []).map(i => ({ id: i.id, caption: i.caption, hashtags: i.hashtags })), pinterest: ($('Merge Social Data1').first().json.socialData.pinterest || []).map(p => ({ id: p.id, title: p.title, description: p.description})), blogs: ($('Merge Social Data1').first().json.socialData.blogs || []).map(b => ({ id: b.id, title: b.title, summary: b.summary, key_trends: b.key_trends })) }, null, 2) }}\n\nVISUAL TREND ANALYSIS (from Instagram/Pinterest images):\n{{ JSON.stringify($('Merge Image Analysis').first().json.imageAnalysis, null, 2) }}",
+        "options": {
+          "systemMessage": "You are a trend analyst identifying style micro-segments within a rug category.\n\nINPUTS:\n- Product data with extracted attributes\n- Social media signals (Instagram captions, Pinterest boards, blog trends)\n- VISUAL TREND ANALYSIS from AI-analyzed Instagram/Pinterest images (colors, patterns, styles, textures, moods)\n\nTASK:\nIdentify 2-3 distinct STYLE MICRO-SEGMENTS within this category.\n\nIMPORTANT: Heavily weight the VISUAL TREND ANALYSIS data - it contains AI-extracted insights from real trending images including dominant colors, patterns, styles, and overall aesthetic direction. Use this to ground your micro-segments in actual visual trends.\n\nA micro-segment is a specific aesthetic direction with:\n- Clear visual identity (informed by image analysis)\n- Consistent color palette (use colors from visual analysis)\n- Common materials/textures (match textures seen in images)\n- Target use case\n\nEXAMPLES OF MICRO-SEGMENTS:\n- \"Vintage Distressed Medallion\" - antique-look, faded patterns, neutral tones\n- \"Modern Geometric Minimalist\" - clean lines, monochromatic, low-pile\n- \"Bohemian Textured\" - layered textures, warm earth tones, natural fibers\n- \"Coastal Casual\" - blues, whites, natural jute, relaxed aesthetic\n- \"Farmhouse Braided\" - traditional braided look, warm neutrals, rustic charm\n\nOUTPUT FORMAT (JSON only, no markdown):\n{\n  \"micro_segments\": [\n    {\n      \"name\": \"Segment Name\",\n      \"description\": \"2-3 sentence description of the aesthetic and why it's trending\",\n      \"visual_characteristics\": [\"characteristic 1\", \"characteristic 2\", \"characteristic 3\"],\n      \"color_palette\": [\"color1\", \"color2\", \"color3\"],\n      \"typical_materials\": [\"material1\", \"material2\"],\n      \"target_rooms\": [\"living room\", \"bedroom\"],\n      \"price_positioning\": \"value|mid-range|premium\",\n      \"trend_signals\": [\"evidence from visual analysis\", \"evidence from product data\", \"evidence from social captions\"],\n      \"image_prompt_keywords\": [\"keyword1\", \"keyword2\", \"keyword3\", \"keyword4\"]\n    }\n  ]\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        3840,
+        32
+      ],
+      "id": "4435564a-2fb2-4f82-b1ed-8e60fa8017dd",
+      "name": "Identify Top Trends"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        3920,
+        256
+      ],
+      "id": "d5a95e30-8388-4c60-8b4e-232de70406b9",
+      "name": "Mistral Cloud Chat Model2",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "5dEXAnMDTc3zhdP5",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse micro-segment output\nlet output = $input.first().json.output;\n\nif (typeof output === 'string') {\n  output = output.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  try {\n    output = JSON.parse(output);\n  } catch (e) {\n    // Create default segments if parsing fails\n    output = {\n      micro_segments: [\n        {\n          name: 'Classic Neutral',\n          description: 'Timeless neutral tones with subtle patterns',\n          visual_characteristics: ['neutral colors', 'subtle patterns', 'versatile design'],\n          color_palette: ['Cream', 'Gray', 'Beige'],\n          typical_materials: ['Polyester', 'Polypropylene'],\n          target_rooms: ['living room', 'bedroom'],\n          price_positioning: 'mid-range',\n          trend_signals: ['Based on product data analysis'],\n          image_prompt_keywords: ['neutral rug', 'modern interior', 'cozy living room']\n        }\n      ]\n    };\n  }\n}\n\nconst segments = output.micro_segments || [];\n\nreturn [{\n  json: {\n    microSegments: segments,\n    segmentCount: segments.length\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4192,
+        32
+      ],
+      "id": "ffaf402a-10f0-410c-b373-f1d231017350",
+      "name": "Save Trend List"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Split micro-segments for individual image generation\nconst segments = $input.first().json.microSegments || [];\n\nif (segments.length === 0) {\n  return [{ json: { segment: null, skip: true } }];\n}\n\nreturn segments.map(segment => ({ json: { segment } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4416,
+        32
+      ],
+      "id": "492bea83-5cbc-4980-a96d-ce06119238db",
+      "name": "Split Segments For Images"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1b7bd426-bc93-46b7-bc44-234515e22137",
+              "leftValue": "={{ $json.segment.name }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4640,
+        32
+      ],
+      "id": "7455a0f4-003c-452e-ad40-c03bd741f588",
+      "name": "Check Segments Exists"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=MICRO-SEGMENT:\nName: {{ $json.segment?.name || \"Style\" }}\nDescription: {{ $json.segment?.description || \"\" }}\nVisual Characteristics: {{ $json.segment?.visual_characteristics?.join(\", \") || \"\" }}\nColor Palette: {{ $json.segment?.color_palette?.join(\", \") || \"\" }}\nMaterials: {{ $json.segment?.typical_materials?.join(\", \") || \"\" }}\nTarget Rooms: {{ $json.segment?.target_rooms?.join(\", \") || \"\" }}\nKeywords: {{ $json.segment?.image_prompt_keywords?.join(\", \") || \"\" }}\n\nRUG CATEGORY: {{ $(\"Input Parser1\").first().json.selectedCategory }}",
+        "options": {
+          "systemMessage": "You are an expert image generation prompt engineer specializing in interior design photography and moodboards.\n\nCreate a detailed prompt for generating a photorealistic moodboard image showcasing this rug style.\n\nThe image should feature:\n1. A beautiful, realistic interior room setting appropriate for the rug style\n2. The rug as the clear focal point, showing its pattern, texture, and colors\n3. Complementary furniture and decor that enhances the rug's aesthetic\n4. Natural, warm lighting that highlights textures\n5. Professional interior photography composition\n\nPROMPT REQUIREMENTS:\n- Write as a single flowing paragraph\n- Be specific about colors (use exact color names)\n- Describe materials and textures in detail\n- Include the room type and atmosphere\n- Mention lighting quality\n- Keep under 150 words\n- Do NOT use bullet points or lists\n- Do NOT include any markdown formatting\n\nOUTPUT: Only the prompt text, nothing else. No quotes, no explanations, no labels."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        4864,
+        32
+      ],
+      "id": "30ea0201-5501-40f0-9c7e-c533b993f27d",
+      "name": "Generate Image Prompt"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        4944,
+        256
+      ],
+      "id": "aad2af1a-593d-408a-9135-9da0a2893921",
+      "name": "Mistral Cloud Chat Model3",
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "5dEXAnMDTc3zhdP5",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clean prompt for Hugging Face API\nlet inputPrompt = $input.first().json.output || '';\nconst segmentName = $input.first().json.segment?.name || 'Style';\n\n// Remove line breaks\nlet cleanPrompt = inputPrompt.split(/\\r?\\n/).join(' ');\n\n// Remove Markdown formatting\ncleanPrompt = cleanPrompt.replace(/\\*\\*/g, '').replace(/\\*/g, '');\n\n// Replace double quotes with single quotes\ncleanPrompt = cleanPrompt.replace(/\"/g, \"'\");\n\n// Remove extra whitespace\ncleanPrompt = cleanPrompt.replace(/\\s+/g, ' ').trim();\n\n// Add quality boosters if not present\nif (!cleanPrompt.toLowerCase().includes('professional')) {\n  cleanPrompt = 'Professional interior design photography, ' + cleanPrompt;\n}\nif (!cleanPrompt.toLowerCase().includes('high quality')) {\n  cleanPrompt += ', high quality, detailed textures, natural lighting';\n}\n\nreturn [{\n  json: {\n    prompt: cleanPrompt,\n    segmentName: segmentName\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5216,
+        32
+      ],
+      "id": "361ebc81-1c40-4813-b2d6-174b46dcd3d2",
+      "name": "Clean Prompt"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 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"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "image/png"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"inputs\": \"{{ $json.prompt }}\" }",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        5440,
+        32
+      ],
+      "id": "2679fa28-01d6-4bb8-84c5-faaf0abf898b",
+      "name": "Generate Image (HuggingFace)",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Encode image to base64 for HTML embedding\nconst items = $input.all();\nconst results = [];\n\nfor (let i = 0; i < items.length; i++) {\n  const item = items[i];\n  const segmentName = item.json.segmentName || 'Style';\n\n  // Check if we have binary data\n  if (item.binary && item.binary.data) {\n    try {\n      // Use n8n helper to get actual binary buffer (not the filesystem pointer)\n      const binaryBuffer = await this.helpers.getBinaryDataBuffer(i, 'data');\n      const base64String = binaryBuffer.toString('base64');\n      \n      results.push({\n        json: {\n          segmentName: segmentName,\n          base64Image: base64String,\n          mimeType: item.binary.data.mimeType || 'image/png',\n          hasImage: true\n        }\n      });\n    } catch (error) {\n      results.push({\n        json: {\n          segmentName: segmentName,\n          base64Image: null,\n          mimeType: null,\n          hasImage: false,\n          error: 'Failed to encode: ' + error.message\n        }\n      });\n    }\n  } else {\n    results.push({\n      json: {\n        segmentName: segmentName,\n        base64Image: null,\n        mimeType: null,\n        hasImage: false,\n        error: 'No binary data returned'\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5664,
+        32
+      ],
+      "id": "3fc6e0b0-da97-4eff-9b8a-4733cefcd131",
+      "name": "Encode to Base"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all generated images\nconst allImages = $input.all().map(item => ({\n  segmentName: item.json.segmentName,\n  base64Image: item.json.base64Image,\n  mimeType: item.json.mimeType || 'image/png',\n  hasImage: item.json.hasImage || false\n}));\n\nconst validImages = allImages.filter(img => img.hasImage && img.base64Image);\n\nreturn [{\n  json: {\n    generatedImages: validImages,\n    totalImages: validImages.length,\n    failedImages: allImages.length - validImages.length\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5888,
+        32
+      ],
+      "id": "f3cd35e6-f739-4e75-975b-0c43466e3416",
+      "name": "Collect All Images"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=BLOG CONTENT:\n{{ JSON.stringify($('Merge Social Data1').first().json.socialData.blogs, null, 2) }}\n\nCATEGORY: {{ $('Input Parser1').first().json.selectedCategory }}",
+        "options": {
+          "systemMessage": "You are a domain expert extracting structured knowledge from home decor blog articles.\n\nTASK: Analyze the blog content and extract key expertise relevant to the rug category specified.\n\nExtract the following structured knowledge:\n\n1. MATERIAL EXPERTISE\n   - Best materials for this rug type and why\n   - Pros and cons of each material\n   - Durability ratings\n   - Care requirements by material\n\n2. SIZING GUIDE\n   - Room-by-room size recommendations\n   - Furniture placement rules\n   - Common sizing mistakes to avoid\n\n3. STYLE & TREND INSIGHTS\n   - Current design trends mentioned\n   - Color palette recommendations\n   - Pattern advice\n   - Style matching guidance\n\n4. BUYER GUIDANCE\n   - Key purchase considerations\n   - Quality indicators to look for\n   - Price-to-quality expectations\n   - Common buyer mistakes\n\n5. CARE & MAINTENANCE\n   - Cleaning recommendations\n   - Longevity tips\n   - When to replace\n\nOUTPUT FORMAT (JSON only, no markdown):\n{\n  \"materials\": {\n    \"recommendations\": [\"material1 - reason\", \"material2 - reason\"],\n    \"durability\": {\"wool\": \"high\", \"polyester\": \"medium\"},\n    \"care_needs\": {\"wool\": \"professional cleaning\", \"polyester\": \"machine washable\"}\n  },\n  \"sizing\": {\n    \"living_room\": \"8x10 or 9x12 for most rooms\",\n    \"bedroom\": \"5x8 beside bed or 8x10 under bed\",\n    \"dining\": \"extend 24 inches beyond table\",\n    \"rules\": [\"Leave 12-18 inches from walls\", \"Front legs of furniture on rug\"]\n  },\n  \"style_insights\": {\n    \"trending\": [\"natural fibers\", \"vintage distressed\", \"neutral palettes\"],\n    \"color_advice\": \"Neutral palettes dominate...\",\n    \"pattern_tips\": \"Geometric patterns for modern, medallion for traditional\"\n  },\n  \"buyer_guidance\": {\n    \"quality_indicators\": [\"knots per inch\", \"pile density\", \"backing quality\"],\n    \"considerations\": [\"traffic level\", \"pets\", \"allergies\", \"sunlight exposure\"],\n    \"price_tiers\": {\"budget\": \"$50-150\", \"mid\": \"$150-400\", \"premium\": \"$400+\"}\n  },\n  \"care\": {\n    \"cleaning\": \"Vacuum weekly, deep clean annually\",\n    \"maintenance\": [\"rotate every 6 months\", \"use rug pad\", \"blot spills immediately\"],\n    \"lifespan\": \"5-15 years depending on material and traffic\"\n  }\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        6112,
+        32
+      ],
+      "id": "04528f85-6243-497a-ba08-60d1361e2fdd",
+      "name": "Blog Knowledge Extractor",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        6192,
+        256
+      ],
+      "id": "78f044ba-136b-4f14-bb65-363f2040ec4f",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Blog Knowledge output\nvar output = $input.first().json.output;\n\nif (typeof output === 'string') {\n  // Remove markdown code fences\n  output = output.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n  try {\n    output = JSON.parse(output);\n  } catch (e) {\n    // Fallback structure if parsing fails\n    output = {\n      materials: { recommendations: [], durability: {}, care_needs: {} },\n      sizing: { rules: [] },\n      style_insights: { trending: [] },\n      buyer_guidance: { quality_indicators: [], considerations: [] },\n      care: { maintenance: [] }\n    };\n  }\n}\n\nreturn [{\n  json: {\n    blogKnowledge: output,\n    extractedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6464,
+        32
+      ],
+      "id": "f50e4a0e-0308-478b-8bdb-682874388905",
+      "name": "Parse Blog Knowledge"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Input Parser1').first().json;\nconst social = $('Merge Social Data1').first().json;\nconst products = $('Remove Invalid Products').first().json;\n\nconst date = new Date().toLocaleDateString();\nconst category = input.selectedCategory || 'Unknown';\nconst categoryKey = input.categoryKey || '';\nconst productCount = products.totalFiltered || 0;\nconst igCount = (social.socialData && social.socialData.instagram) ? social.socialData.instagram.length : 0;\nconst pinCount = (social.socialData && social.socialData.pinterest) ? social.socialData.pinterest.length : 0;\nconst blogCount = (social.socialData && social.socialData.blogs) ? social.socialData.blogs.length : 0;\n\nconst html = '<section class=\"scope-section\">' +\n  '<h2>Scope of Research</h2>' +\n  '<div class=\"scope-grid\">' +\n    '<div class=\"scope-card\">' +\n      '<div class=\"scope-icon\">📅</div>' +\n      '<h4>Timeframe</h4>' +\n      '<p>Current market snapshot<br><small>Generated: ' + date + '</small></p>' +\n    '</div>' +\n    '<div class=\"scope-card\">' +\n      '<div class=\"scope-icon\">🌍</div>' +\n      '<h4>Market</h4>' +\n      '<p>US Residential<br><small>E-commerce focus</small></p>' +\n    '</div>' +\n    '<div class=\"scope-card\">' +\n      '<div class=\"scope-icon\">📊</div>' +\n      '<h4>Data Sources</h4>' +\n      '<ul>' +\n        '<li>Amazon product listings (' + productCount + ' products)</li>' +\n        '<li>Instagram trends (' + igCount + ' posts)</li>' +\n        '<li>Pinterest boards (' + pinCount + ' pins)</li>' +\n        '<li>Industry blogs (' + blogCount + ' articles)</li>' +\n      '</ul>' +\n    '</div>' +\n    '<div class=\"scope-card\">' +\n      '<div class=\"scope-icon\">🎯</div>' +\n      '<h4>Category Focus</h4>' +\n      '<p>' + category + '<br><small>' + categoryKey + '</small></p>' +\n    '</div>' +\n  '</div>' +\n'</section>';\n\nreturn [{ json: { sectionHtml: html, sectionName: 'scope' } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6688,
+        32
+      ],
+      "id": "b14743ee-dd26-43f3-b91a-67f2d9f0bb75",
+      "name": "Scope Generator"
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        6912,
+        32
+      ],
+      "id": "376578ee-6d2a-4f35-a5cb-cd280316aeb8",
+      "name": "Wait1",
+      "webhookId": "eab902de-788b-4662-bdaf-a07c4d4e89d7"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=CATEGORY: {{ $(\"Input Parser1\").first().json.selectedCategory }}\n\nATTRIBUTE SUMMARY:\n{{ JSON.stringify($(\"Save Standardized Data\").first().json.summary, null, 2) }}\n\nMICRO-SEGMENTS:\n{{ JSON.stringify($(\"Save Trend List\").first().json.microSegments, null, 2) }}\n\nVISUAL TRENDS:\n{{ JSON.stringify($(\"Merge Image Analysis\").first().json.imageAnalysis?.trend_summary, null, 2) }}\n\nBLOG INSIGHTS:\n{{ JSON.stringify($(\"Parse Blog Knowledge\").first().json.blogKnowledge?.style_insights, null, 2) }}\n\nPRODUCT COUNT: {{ $(\"Remove Invalid Products\").first().json.totalFiltered }}\nSOCIAL ITEMS: {{ $(\"Merge Social Data1\").first().json.totalSocialItems }}",
+        "options": {
+          "systemMessage": "You are a senior market analyst writing an executive summary for Wayfair's category strategy team.\n\nTASK: Write a compelling Executive Summary section for the trend report.\n\nREQUIREMENTS:\n1. Lead with the single most important insight\n2. Include 4-5 key bullet points covering:\n   - Primary trend direction\n   - Top-performing product attributes\n   - Emerging micro-segments to watch\n   - Market opportunity or risk signal\n   - Actionable recommendation\n\n3. Add a \"Why This Matters\" paragraph (2-3 sentences)\n\nOUTPUT FORMAT (HTML only, no markdown fences):\n<section class=\"executive-summary\">\n  <h2>Executive Summary</h2>\n  <div class=\"summary-hero\">\n    <div class=\"key-insight\">\n      <span class=\"label\">Key Insight</span>\n      <p>[Single most important finding]</p>\n    </div>\n  </div>\n  <div class=\"summary-points\">\n    <h3>Key Findings</h3>\n    <ul>\n      <li><strong>[Topic]:</strong> [Insight]</li>\n    </ul>\n  </div>\n  <div class=\"why-matters\">\n    <h3>Why This Matters</h3>\n    <p>[Strategic implications]</p>\n  </div>\n</section>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        7136,
+        32
+      ],
+      "id": "73b4a443-9cc1-442c-98b0-ebfbb55fc035",
+      "name": "Executive Summary Generator",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        7216,
+        256
+      ],
+      "id": "797bd7df-d333-43f1-b8df-800ece2fe94f",
+      "name": "Google Gemini Chat Model1",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        7488,
+        32
+      ],
+      "id": "21f15651-d8c0-42b1-b3c8-3f562c078f64",
+      "name": "Wait3",
+      "webhookId": "1f6d3aa3-77ad-4320-902b-c8b08cbe72d9"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify($('fetch market data').first().json.items[0].content, null, 2) }}",
+        "options": {
+          "systemMessage": "You are a senior market research analyst. Use the blog knowledge as your primary source to write an authoritative Market Research section.\n\nSECTIONS TO WRITE:\n\n1. MARKET DATA (Use quantitative data from MARKET DATA input)\n     - Market Size: Current value and projected growth\n     - Growth Rate: CAGR percentage\n     - Key Segments: By material, price, distribution\n     - Regional Highlights: If available\n\n2. MARKET OVERVIEW (2-3 paragraphs)\n   - Current state of this rug category market\n   - Key consumer trends driving demand\n   - Where this category fits in home decor\n\n2. BUYER PROFILE\n   - Who buys this category?\n   - Purchase motivations\n   - Key decision factors\n\n3. EXPERT INSIGHTS\n   Include 2-3 \"Expert Tip\" callouts with actionable advice from blog knowledge\n\nOUTPUT FORMAT (HTML only):\n <section class=\"market-research\">\n    <h2>Market Research</h2>\n    <div class=\"market-data\">\n      <h3>Market Data & Forecasts</h3>\n      <div class=\"profile-grid\">\n        <div class=\"profile-card\">\n          <h4>Market Size (2025)</h4>\n          <p style=\"font-size: 24px; font-weight: bold; color: #059669;\">[Value]</p>\n        </div>\n        <div class=\"profile-card\">\n          <h4>Projected (2033)</h4>\n          <p style=\"font-size: 24px; font-weight: bold; color: #059669;\">[Value]</p>\n        </div>\n        <div class=\"profile-card\">\n          <h4>CAGR</h4>\n          <p style=\"font-size: 24px; font-weight: bold; color: #059669;\">[Percentage]</p>\n        </div>\n      </div>\n      <h4>Key Segments</h4>\n      <ul>[Segment insights from market data]</ul>\n    </div>\n    <div class=\"market-overview\">\n      <h3>Market Overview</h3>\n      <p>[Analysis paragraphs]</p>\n    </div>\n    <div class=\"buyer-profile\">\n      <h3>Buyer Profile</h3>\n      <div class=\"profile-grid\">\n        <div class=\"profile-card\">\n          <h4>Who Buys</h4>\n          <p>[Demographics]</p>\n        </div>\n        <div class=\"profile-card\">\n          <h4>Motivations</h4>\n          <ul>[Points]</ul>\n        </div>\n        <div class=\"profile-card\">\n          <h4>Decision Factors</h4>\n          <ul>[Points]</ul>\n        </div>\n      </div>\n    </div>\n    <div class=\"expert-insights\">\n      <h3>Expert Insights</h3>\n      <div class=\"expert-tip\">\n        <span class=\"tip-icon\">💡</span>\n        <div class=\"tip-content\">\n          <h4>[Tip Title]</h4>\n          <p>[Actionable advice]</p>\n        </div>\n      </div>\n    </div>\n  </section>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        7712,
+        32
+      ],
+      "id": "71499fba-7dd8-4889-a4ea-c0432d203519",
+      "name": "Market Reserach Generator",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        7792,
+        256
+      ],
+      "id": "924797bd-5e92-445e-acf3-71fb810857c2",
+      "name": "Google Gemini Chat Model2",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        8064,
+        32
+      ],
+      "id": "4954fd87-6f10-407a-8cbe-ab8ca9191b82",
+      "name": "Wait4",
+      "webhookId": "a063cbc4-2500-4ec0-82ea-0f315729f229"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=CATEGORY: {{ $('Input Parser1').first().json.selectedCategory }}\n\nMICRO-SEGMENTS (write FULL descriptions):\n{{ JSON.stringify($('Save Trend List').first().json.microSegments, null, 2) }}\n\nBLOG SIZING KNOWLEDGE:\n{{ JSON.stringify($('Parse Blog Knowledge').first().json.blogKnowledge?.sizing, null, 2) }}",
+        "options": {
+          "systemMessage": "You are a category specialist writing the Category Deep Dive section.\n\nSECTIONS:\n\n1. CATEGORY DEFINITION\n   - What defines this rug type\n   - Typical specifications\n   - Common use cases\n\n2. MICRO-SEGMENTS (CRITICAL - write FULL descriptions)\n   For EACH micro-segment, write a complete feature card:\n   - Segment name\n   - FULL description (3-4 sentences minimum - NEVER truncate)\n   - Visual characteristics\n   - Color palette\n   - Target rooms\n   - Why it's trending\n\n3. SIZING GUIDE\n   Room-by-room recommendations from blog knowledge\n\nOUTPUT FORMAT (HTML only):\n<section class=\"category-deep-dive\">\n  <h2>Category Deep Dive</h2>\n  <div class=\"category-definition\">\n    <h3>Category Definition</h3>\n    <p>[Definition]</p>\n  </div>\n  <div class=\"micro-segments\">\n    <h3>Trending Micro-Segments</h3>\n    <div class=\"segment-cards\">\n      <div class=\"segment-card\">\n        <div class=\"segment-header\">\n          <h4>[Segment Name]</h4>\n          <span class=\"segment-badge\">[positioning]</span>\n        </div>\n        <p class=\"segment-description\">[FULL 3-4 sentence description]</p>\n        <div class=\"segment-meta\">\n          <span>🎨 [Colors]</span>\n          <span>🏠 [Target rooms]</span>\n        </div>\n      </div>\n    </div>\n  </div>\n  <div class=\"sizing-guide\">\n    <h3>Sizing Guide</h3>\n    [Room recommendations]\n  </div>\n</section>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        8288,
+        32
+      ],
+      "id": "d8818a7f-46fc-435e-b7a7-8ac6292c45ac",
+      "name": "Category Generator",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        8368,
+        256
+      ],
+      "id": "2a1a46fb-57e9-43e9-8d08-624aaa1fb313",
+      "name": "Google Gemini Chat Model3",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        8640,
+        32
+      ],
+      "id": "eb028113-4758-4006-8e39-58e304e460ab",
+      "name": "Wait5",
+      "webhookId": "318c359b-d9ec-4083-b73b-641d9ad72f19"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ATTRIBUTE DATA:\n{{ JSON.stringify($('Save Standardized Data').first().json, null, 2) }}\n\nBLOG MATERIAL EXPERTISE:\n{{ JSON.stringify($('Parse Blog Knowledge').first().json.blogKnowledge?.materials, null, 2) }}\n\nPRODUCT COUNT: {{ $('Remove Invalid Products').first().json.totalFiltered }}",
+        "options": {
+          "systemMessage": "You are a product analyst creating data-driven attribute analysis.\n\nSECTIONS:\n\n1. MATERIALS BREAKDOWN\n   - Top materials with percentages (use data bars)\n   - Expert context from blog knowledge\n   - Recommendations for different needs\n\n2. SIZE DISTRIBUTION\n   - Most common sizes\n   - Buyer preference insights\n\n3. COLOR & PATTERN ANALYSIS\n   - Dominant colors with percentages\n   - Trending patterns\n\n4. PRICE POSITIONING\n   - Price bucket distribution\n   - Value insights\n\nInclude actual percentages for visualization. Add expert context from blog knowledge.\n\nOUTPUT FORMAT (HTML only):\n<section class=\"attribute-analysis\">\n  <h2>Product Attribute Analysis</h2>\n  <p class=\"section-intro\">Analysis of products reveals:</p>\n  <div class=\"attribute-grid\">\n    <div class=\"attribute-card\">\n      <h3>Materials</h3>\n      <div class=\"data-bars\">\n        <div class=\"data-row\">\n          <span class=\"label\">[Material]</span>\n          <div class=\"bar-container\"><div class=\"bar\" style=\"width: [X]%\"></div></div>\n          <span class=\"value\">[X]%</span>\n        </div>\n      </div>\n      <div class=\"expert-note\"><strong>Expert Note:</strong> [Context]</div>\n    </div>\n    <div class=\"attribute-card\">\n      <h3>Sizes</h3>\n      [Similar structure]\n    </div>\n    <div class=\"attribute-card\">\n      <h3>Colors & Patterns</h3>\n      [Color chips and pattern list]\n    </div>\n    <div class=\"attribute-card\">\n      <h3>Price Distribution</h3>\n      [Price tiers]\n    </div>\n  </div>\n</section>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        8864,
+        32
+      ],
+      "id": "516ac7f6-b2e5-4358-950d-36d2f2d8967b",
+      "name": "AI Agent",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        8944,
+        256
+      ],
+      "id": "018f4025-9c01-473c-a49d-795d61a050f3",
+      "name": "Google Gemini Chat Model4",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        9216,
+        32
+      ],
+      "id": "a60079e6-026e-4e63-b804-e7de8660a674",
+      "name": "Wait6",
+      "webhookId": "f8ef5081-ff3a-4410-ae04-9a8a51f98463"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=IMAGE ANALYSIS:\n{{ JSON.stringify($('Merge Image Analysis').first().json.imageAnalysis, null, 2) }}\n\nNote: Visual trend data is derived from social media captions and hashtags (Instagram/Pinterest), not direct image analysis. Use the hashtag frequencies and caption text to identify color, pattern, and style trends.\n\nSOCIAL IMAGES COUNT: {{ $('Merge Social Data1').first().json.totalSocialImages }}\n\nGENERATED IMAGES COUNT: {{ $('Collect All Images').first().json.generatedImages?.length || 0 ",
+        "options": {
+          "systemMessage": "You are a visual trend analyst.\n\nSECTIONS:\n\n1. VISUAL TREND SUMMARY\n   - Overall aesthetic direction\n   - Dominant color story\n   - Pattern trends\n   - Texture preferences\n\n2. MOODBOARD GALLERY\n   Use placeholders: {{GENERATED_IMAGE_0}}, {{GENERATED_IMAGE_1}}, etc.\n   Add descriptive captions\n\n3. SOCIAL REFERENCE GALLERY\n   Use placeholders: {{SOCIAL_IMAGE_0}}, {{SOCIAL_IMAGE_1}}, etc.\n   Include source and caption\n\nOUTPUT FORMAT (HTML only):\n<section class=\"visual-trends\">\n  <h2>Visual Trend Analysis</h2>\n  <div class=\"trend-summary\">\n    <h3>The Visual Story</h3>\n    <p>[Visual direction paragraphs]</p>\n    <div class=\"trend-highlights\">\n      <div class=\"highlight\">\n        <span class=\"highlight-label\">Dominant Colors</span>\n        <div class=\"color-palette-display\">\n          <span class=\"color-swatch\" style=\"background: [color]\">[name]</span>\n        </div>\n      </div>\n      <div class=\"highlight\">\n        <span class=\"highlight-label\">Key Patterns</span>\n        <p>[patterns]</p>\n      </div>\n    </div>\n  </div>\n  <div class=\"moodboard-gallery\">\n    <h3>AI-Generated Moodboards</h3>\n    <div class=\"gallery-grid\">\n      <div class=\"gallery-item\">\n        <img src=\"{{GENERATED_IMAGE_0}}\" alt=\"Moodboard\">\n        <p class=\"gallery-caption\">[Description]</p>\n      </div>\n    </div>\n  </div>\n  <div class=\"social-gallery\">\n    <h3>Trending on Social</h3>\n    <div class=\"gallery-grid\">\n      <div class=\"gallery-item social\">\n        <img src=\"{{SOCIAL_IMAGE_0}}\" alt=\"Social trend\">\n        <p class=\"gallery-caption\"><span class=\"source\">Instagram</span> [caption]</p>\n      </div>\n    </div>\n  </div>\n</section>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        9440,
+        32
+      ],
+      "id": "52a68425-70ef-4652-b204-1fc06a410dfd",
+      "name": "AI Agent1",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        9520,
+        256
+      ],
+      "id": "577a3f9d-b8bd-47b0-9ae4-52fafe2fb79c",
+      "name": "Google Gemini Chat Model5",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        9792,
+        32
+      ],
+      "id": "3e8a7324-9ce7-442f-b0cf-a8d2d4738f22",
+      "name": "Wait7",
+      "webhookId": "5e60d06d-970b-4300-a2c7-06c20bb5eee4"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify($('Parse Blog Knowledge').first().json.blogKnowledge, null, 2) }}",
+        "options": {
+          "systemMessage": "You are a risk analyst. Write the Trend Risks section with informed assessments.\n\nANALYZE 5 RISK CATEGORIES:\n1. Performance Risks - durability, quality\n2. Price Risks - cost, value perception\n3. Sustainability Risks - environmental concerns\n4. Care Risks - maintenance, cleaning\n5. Trend Obsolescence - how quickly trends date\n\nRate each: High / Medium / Low\nInclude mitigation suggestions\n\nOUTPUT FORMAT (HTML only):\n<section class=\"trend-risks\">\n  <h2>Trend Risks Assessment</h2>\n  <div class=\"risk-summary\">\n    <span class=\"risk-high\">[X] High</span>\n    <span class=\"risk-medium\">[X] Medium</span>\n    <span class=\"risk-low\">[X] Low</span>\n  </div>\n  <div class=\"risk-cards\">\n    <div class=\"risk-card risk-high\">\n      <div class=\"risk-header\">\n        <span class=\"risk-icon\">🔴</span>\n        <h4>[Risk Title]</h4>\n        <span class=\"risk-badge high\">High Risk</span>\n      </div>\n      <p class=\"risk-description\">[Description]</p>\n      <div class=\"risk-mitigation\"><strong>Mitigation:</strong> [Suggestion]</div>\n    </div>\n  </div>\n</section>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        10016,
+        32
+      ],
+      "id": "bc6fcdef-e921-45c3-8fed-da9135236e75",
+      "name": "AI Agent2",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        10096,
+        256
+      ],
+      "id": "1ca99c06-38f8-4e9e-b743-f989ddad924e",
+      "name": "Google Gemini Chat Model6",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        10368,
+        32
+      ],
+      "id": "1de1494c-7a02-4e29-bca0-bc300e7ff471",
+      "name": "Wait8",
+      "webhookId": "d297602f-355e-41c8-b60c-85ad4e5754aa"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=CATEGORY: {{ $('Input Parser1').first().json.selectedCategory }}\n\nMICRO-SEGMENTS:\n{{ JSON.stringify($('Save Trend List').first().json.microSegments.map(s => s.name), null, 2) }}\n\nTOP ATTRIBUTES:\n{{ JSON.stringify($('Save Standardized Data').first().json.summary, null, 2) }}\n\nBLOG BUYER GUIDANCE:\n{{ JSON.stringify($('Parse Blog Knowledge').first().json.blogKnowledge.buyer_guidance, null, 2) }}",
+        "options": {
+          "systemMessage": "You are a category strategy consultant. Write actionable recommendations.\n\nSECTIONS:\n\n1. DEMAND SIGNALS\n   - What the data tells us\n   - Consumer preference patterns\n   - Opportunity indicators\n\n2. STRATEGIC RECOMMENDATIONS (4-5 specific actions)\n   - Assortment recommendations\n   - Pricing strategy\n   - Marketing angles\n   - Segment prioritization\n\n3. QUICK WINS (3 immediate actions)\n\n4. WATCH LIST (trends to monitor)\n\nOUTPUT FORMAT (HTML only):\n<section class=\"recommendations\">\n  <h2>Demand Signals & Recommendations</h2>\n  <div class=\"demand-signals\">\n    <h3>What the Data Tells Us</h3>\n    <div class=\"signal-cards\">\n      <div class=\"signal-card\">\n        <span class=\"signal-icon\">📈</span>\n        <p>[Insight]</p>\n      </div>\n    </div>\n  </div>\n  <div class=\"strategic-recs\">\n    <h3>Strategic Recommendations</h3>\n    <div class=\"rec-list\">\n      <div class=\"rec-item\">\n        <span class=\"rec-number\">1</span>\n        <div class=\"rec-content\">\n          <h4>[Title]</h4>\n          <p>[Recommendation]</p>\n          <span class=\"rec-impact\">Impact: High</span>\n        </div>\n      </div>\n    </div>\n  </div>\n  <div class=\"quick-wins\">\n    <h3>Quick Wins</h3>\n    <div class=\"wins-grid\">\n      <div class=\"win-card\">\n        <span class=\"win-icon\">⚡</span>\n        <p>[Action]</p>\n      </div>\n    </div>\n  </div>\n  <div class=\"watch-list\">\n    <h3>Watch List</h3>\n    <ul><li>[Trend]</li></ul>\n  </div>\n</section>"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        10592,
+        32
+      ],
+      "id": "b1164df4-8828-4bcd-8541-caa3145f4549",
+      "name": "AI Agent3",
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        10672,
+        256
+      ],
+      "id": "d2cce6a4-7a26-4898-8ec1-c2a0934c13b2",
+      "name": "Google Gemini Chat Model7",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "485kBewTPkGn6Vxb",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all section outputs\nconst sections = {};\n\ntry { sections.executive = $('Executive Summary Generator').first().json.output || ''; } catch(e) { sections.executive = ''; }\ntry { sections.scope = $('Scope Generator').first().json.sectionHtml || ''; } catch(e) { sections.scope = ''; }\ntry { sections.market = $('Market Research Generator').first().json.output || ''; } catch(e) { sections.market = ''; }\ntry { sections.category = $('Category Generator').first().json.output || ''; } catch(e) { sections.category = ''; }\ntry { sections.attributes = $('Attribute Generator').first().json.output || ''; } catch(e) { sections.attributes = ''; }\ntry { sections.visual = $('Visual Trends Generator').first().json.output || ''; } catch(e) { sections.visual = ''; }\ntry { sections.risks = $('Risks Generator').first().json.output || ''; } catch(e) { sections.risks = ''; }\ntry { sections.recommendations = $('Recommendations Generator').first().json.output || ''; } catch(e) { sections.recommendations = ''; }\n\n// Get metadata\nconst category = $('Input Parser1').first().json.selectedCategory;\nconst date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });\n\n// Get image store\nlet imageStore = { generatedImages: [], socialRefImages: [] };\ntry {\n  const collectData = $('Collect All Images').first().json;\n  imageStore.generatedImages = collectData.generatedImages || [];\n  imageStore.socialRefImages = $('Merge Social Data1').first().json.socialImages || [];\n} catch(e) {}\n\nreturn [{\n  json: {\n    sections,\n    metadata: { category, date },\n    imageStore\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        10944,
+        32
+      ],
+      "id": "421aec86-5877-4093-b313-37f1472227c7",
+      "name": "Collect All Sections"
+    },
+    {
+      "parameters": {
+        "jsCode": "var data = $input.first().json;\nvar sections = data.sections;\nvar metadata = data.metadata;\nvar imageStore = data.imageStore;\n\n// Clean markdown artifacts from AI outputs\nfunction cleanSection(html) {\n  if (!html) return '';\n  return html\n    .replace(/```html\\s*/gi, '')\n    .replace(/```\\s*/gi, '')\n    .replace(/\\\\n/g, '\\n')\n    .replace(/\\\\\"/g, '\"')\n    .trim();\n}\n\n// Professional CSS - using array join to avoid escaping issues\nvar cssLines = [\n  ':root {',\n  '  --primary: #7C3AED;',\n  '  --primary-light: #A78BFA;',\n  '  --secondary: #1F2937;',\n  '  --accent: #F59E0B;',\n  '  --success: #10B981;',\n  '  --warning: #F59E0B;',\n  '  --danger: #EF4444;',\n  '  --bg-light: #F9FAFB;',\n  '  --bg-card: #FFFFFF;',\n  '  --border: #E5E7EB;',\n  '  --text: #1F2937;',\n  '  --text-light: #6B7280;',\n  '}',\n  '* { margin: 0; padding: 0; box-sizing: border-box; }',\n  'body { font-family: Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: var(--text); background: var(--bg-light); }',\n  '.report-container { max-width: 1000px; margin: 0 auto; padding: 40px 24px; }',\n  '.report-header { background: linear-gradient(135deg, var(--primary) 0%, #5B21B6 100%); color: white; padding: 48px 40px; border-radius: 16px; margin-bottom: 32px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }',\n  '.report-header h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; }',\n  '.report-header .subtitle { font-size: 16px; opacity: 0.9; }',\n  '.report-header .meta { margin-top: 16px; font-size: 13px; opacity: 0.8; }',\n  'section { background: var(--bg-card); border-radius: 12px; padding: 32px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }',\n  'section h2 { font-size: 22px; font-weight: 600; color: var(--secondary); margin-bottom: 24px; padding-bottom: 12px; border-bottom: 2px solid var(--primary-light); }',\n  'section h3 { font-size: 16px; font-weight: 600; color: var(--primary); margin: 24px 0 12px 0; }',\n  'section h4 { font-size: 14px; font-weight: 600; color: var(--secondary); margin-bottom: 8px; }',\n  'p { margin-bottom: 12px; }',\n  'ul, ol { margin-left: 20px; margin-bottom: 16px; }',\n  'li { margin-bottom: 6px; }',\n  '.scope-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }',\n  '.scope-card { background: var(--bg-light); border-radius: 8px; padding: 20px; text-align: center; }',\n  '.scope-icon { font-size: 28px; margin-bottom: 12px; }',\n  '.scope-card h4 { color: var(--primary); margin-bottom: 8px; }',\n  '.scope-card ul { text-align: left; font-size: 13px; margin-left: 16px; }',\n  '.summary-hero { background: linear-gradient(135deg, var(--bg-light) 0%, #EDE9FE 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px; }',\n  '.key-insight { border-left: 4px solid var(--primary); padding-left: 16px; }',\n  '.key-insight .label { font-size: 11px; font-weight: 600; color: var(--primary); text-transform: uppercase; }',\n  '.key-insight p { font-size: 18px; font-weight: 500; margin: 8px 0 0 0; }',\n  '.profile-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 16px; }',\n  '.profile-card { background: var(--bg-light); padding: 16px; border-radius: 8px; }',\n  '.expert-tip { display: flex; gap: 16px; background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); border-left: 4px solid var(--accent); border-radius: 0 8px 8px 0; padding: 16px; margin: 16px 0; }',\n  '.tip-icon { font-size: 24px; }',\n  '.tip-content h4 { color: var(--secondary); margin-bottom: 4px; }',\n  '.tip-content p { margin: 0; font-size: 13px; }',\n  '.segment-cards { display: grid; gap: 20px; }',\n  '.segment-card { background: var(--bg-light); border-radius: 12px; padding: 24px; border: 1px solid var(--border); }',\n  '.segment-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }',\n  '.segment-badge { font-size: 11px; background: var(--primary-light); color: white; padding: 4px 10px; border-radius: 12px; }',\n  '.segment-description { line-height: 1.7; margin-bottom: 16px; }',\n  '.segment-meta { display: flex; gap: 16px; font-size: 13px; color: var(--text-light); }',\n  '.attribute-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }',\n  '.attribute-card { background: var(--bg-light); padding: 20px; border-radius: 8px; }',\n  '.data-bars { margin: 16px 0; }',\n  '.data-row { display: flex; align-items: center; margin-bottom: 12px; }',\n  '.data-row .label { width: 100px; font-size: 13px; font-weight: 500; }',\n  '.data-row .bar-container { flex: 1; height: 8px; background: white; border-radius: 4px; margin: 0 12px; overflow: hidden; }',\n  '.data-row .bar { height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 4px; }',\n  '.data-row .value { width: 40px; text-align: right; font-size: 13px; font-weight: 600; }',\n  '.expert-note { font-size: 13px; color: var(--text-light); padding-top: 12px; border-top: 1px solid var(--border); margin-top: 12px; }',\n  '.gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin: 20px 0; }',\n  '.gallery-item { background: var(--bg-light); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }',\n  '.gallery-item img { width: 100%; height: 200px; object-fit: cover; }',\n  '.gallery-caption { padding: 12px 16px; font-size: 13px; color: var(--text-light); }',\n  '.gallery-item.social { background: #FFF7ED; border-color: #FDBA74; }',\n  '.source { display: inline-block; background: #FB923C; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-right: 8px; }',\n  '.risk-summary { display: flex; gap: 12px; margin-bottom: 20px; }',\n  '.risk-summary span { padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; }',\n  '.risk-high { background: #FEE2E2; color: #DC2626; }',\n  '.risk-medium { background: #FEF3C7; color: #D97706; }',\n  '.risk-low { background: #D1FAE5; color: #059669; }',\n  '.risk-cards { display: grid; gap: 16px; }',\n  '.risk-card { border-radius: 8px; padding: 20px; }',\n  '.risk-card.risk-high { background: #FEF2F2; border-left: 4px solid var(--danger); }',\n  '.risk-card.risk-medium { background: #FFFBEB; border-left: 4px solid var(--warning); }',\n  '.risk-card.risk-low { background: #ECFDF5; border-left: 4px solid var(--success); }',\n  '.risk-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }',\n  '.risk-badge { font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px; text-transform: uppercase; margin-left: auto; }',\n  '.risk-badge.high { background: var(--danger); color: white; }',\n  '.risk-badge.medium { background: var(--warning); color: white; }',\n  '.risk-badge.low { background: var(--success); color: white; }',\n  '.risk-mitigation { font-size: 13px; color: var(--text-light); margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }',\n  '.signal-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 16px 0; }',\n  '.signal-card { background: var(--bg-light); padding: 16px; border-radius: 8px; text-align: center; }',\n  '.signal-icon { font-size: 24px; margin-bottom: 8px; }',\n  '.rec-list { display: grid; gap: 16px; }',\n  '.rec-item { display: flex; gap: 16px; padding: 20px; background: var(--bg-light); border-radius: 8px; }',\n  '.rec-number { width: 32px; height: 32px; background: var(--primary); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; }',\n  '.rec-impact { display: inline-block; margin-top: 8px; font-size: 12px; font-weight: 600; color: var(--success); }',\n  '.wins-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }',\n  '.win-card { background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%); border-radius: 8px; padding: 20px; text-align: center; }',\n  '.win-icon { font-size: 28px; margin-bottom: 8px; }',\n  '.report-footer { text-align: center; padding: 32px; color: var(--text-light); font-size: 12px; }',\n  '@media (max-width: 768px) { .profile-grid, .attribute-grid, .signal-cards, .wins-grid { grid-template-columns: 1fr; } .report-header { padding: 32px 24px; } .report-header h1 { font-size: 24px; } }'\n];\n\nvar CSS = cssLines.join('\\n');\n\n// Build final HTML using string concatenation\nvar html = '<!DOCTYPE html>' +\n  '<html lang=\"en\">' +\n  '<head>' +\n    '<meta charset=\"UTF-8\">' +\n    '<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">' +\n    '<title>' + metadata.category + ' Trend Report</title>' +\n    '<link href=\"https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap\" rel=\"stylesheet\">' +\n    '<style>' + CSS + '</style>' +\n  '</head>' +\n  '<body>' +\n    '<div class=\"report-container\">' +\n      '<header class=\"report-header\">' +\n        '<h1>' + metadata.category + ' Trend Report</h1>' +\n        '<p class=\"subtitle\">Market Intelligence & Trend Analysis</p>' +\n        '<p class=\"meta\">Generated: ' + metadata.date + ' | Wayfair Market Trend Discovery Agent v3</p>' +\n      '</header>' +\n      '<main>' +\n        cleanSection(sections.executive) +\n        cleanSection(sections.scope) +\n        cleanSection(sections.market) +\n        cleanSection(sections.category) +\n        cleanSection(sections.attributes) +\n        cleanSection(sections.visual) +\n        cleanSection(sections.risks) +\n        cleanSection(sections.recommendations) +\n      '</main>' +\n      '<footer class=\"report-footer\">' +\n        '<p>Wayfair Market Trend Discovery Agent v3.0</p>' +\n        '<p>Generated with AI-powered analysis | ' + metadata.date + '</p>' +\n      '</footer>' +\n    '</div>' +\n  '</body>' +\n'</html>';\n\n// Inject generated images\nvar genImages = imageStore.generatedImages || [];\nfor (var i = 0; i < genImages.length; i++) {\n  var img = genImages[i];\n  var placeholder = '{{GENERATED_IMAGE_' + i + '}}';\n  var base64 = img.base64 || img.base64Image || '';\n  if (base64) {\n    var dataUrl = 'data:image/png;base64,' + base64;\n    html = html.split(placeholder).join(dataUrl);\n  }\n}\n\n// Inject social images\nvar socialImages = imageStore.socialRefImages || [];\nfor (var j = 0; j < socialImages.length; j++) {\n  var simg = socialImages[j];\n  var splaceholder = '{{SOCIAL_IMAGE_' + j + '}}';\n  var smimeType = simg.mime_type || simg.mimeType || 'image/jpeg';\n  var sbase64 = simg.image_base64 || simg.base64 || '';\n  if (sbase64) {\n    var sdataUrl = 'data:' + smimeType + ';base64,' + sbase64;\n    html = html.split(splaceholder).join(sdataUrl);\n  }\n}\n\n// Clean up unmatched placeholders\nhtml = html.replace(/\\{\\{GENERATED_IMAGE_\\d+\\}\\}/g, '');\nhtml = html.replace(/\\{\\{SOCIAL_IMAGE_\\d+\\}\\}/g, '');\n\nreturn [{ json: { cleanedHtml: html } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        11168,
+        32
+      ],
+      "id": "bf0dcc3b-210a-4321-bdba-36902ae6a5f1",
+      "name": "Assemble HTML Report"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate report sections and check images were injected\nconst html = $input.first().json.cleanedHtml || '';\n\nconst requiredSections = [\n  { name: 'Executive Summary', pattern: /executive\\s*summary/i },\n  { name: 'Scope', pattern: /scope|research/i },\n  { name: 'Category', pattern: /category/i },\n  { name: 'Attribute', pattern: /attribute|material|size/i },\n  { name: 'Risk', pattern: /risk/i },\n  { name: 'Demand', pattern: /demand|signal|seo/i }\n];\n\nconst validation = {\n  isValid: true,\n  sectionsFound: [],\n  sectionsMissing: [],\n  warnings: []\n};\n\nrequiredSections.forEach(section => {\n  if (section.pattern.test(html)) {\n    validation.sectionsFound.push(section.name);\n  } else {\n    validation.sectionsMissing.push(section.name);\n  }\n});\n\n// Check for injected images (both PNG and JPEG)\nconst pngImages = (html.match(/data:image\\/png;base64,/g) || []).length;\nconst jpegImages = (html.match(/data:image\\/jpeg;base64,/g) || []).length;\nvalidation.imageCount = pngImages + jpegImages;\n\nif (validation.imageCount === 0) {\n  validation.warnings.push('No images embedded');\n}\n\n// Check HTML structure\nif (!html.includes('</html>')) {\n  validation.warnings.push('HTML may be truncated');\n  validation.isValid = false;\n}\n\nreturn [{ json: { cleanedHtml: html, validation } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        11392,
+        32
+      ],
+      "id": "2b539e7f-79b7-4b5f-8247-c9fc53dfa162",
+      "name": "Section Validator1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Create downloadable HTML file\nconst html = $input.first().json.cleanedHtml || '';\nconst validation = $input.first().json.validation || {};\nconst category = $('Input Parser1').first().json.selectedCategory || 'Rug';\n\n// Generate filename\nconst dateStr = new Date().toISOString().split('T')[0];\nconst categorySlug = category.toLowerCase().replace(/\\s+/g, '_');\nconst fileName = `${categorySlug}_trend_report_${dateStr}.html`;\n\n// Create binary data for download\nconst buffer = Buffer.from(html, 'utf8');\n\nreturn [{\n  json: {\n    fileName: fileName,\n    validation: validation,\n    category: category,\n    generatedAt: new Date().toISOString()\n  },\n  binary: {\n    data: {\n      data: buffer.toString('base64'),\n      mimeType: 'text/html',\n      fileName: fileName\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        11616,
+        32
+      ],
+      "id": "f4c52672-c197-4b8d-b3d7-2b096748dc60",
+      "name": "Create Download File1"
+    },
+    {
+      "parameters": {
+        "html": "{{ $binary.data.data.toString() }}"
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        11840,
+        32
+      ],
+      "id": "70d64e57-3ba5-4a41-8227-35229c73941b",
+      "name": "HTML Preview1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Input Parser1": {
+      "main": [
+        [
+          {
+            "node": "Category validator1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "what chat message received": {
+      "main": [
+        [
+          {
+            "node": "Input Parser1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Category validator1": {
+      "main": [
+        [
+          {
+            "node": "Prepare Collection List",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Prepare Direct Links",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Category Key",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Collection List": {
+      "main": [
+        [
+          {
+            "node": "Is List Empty?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is List Empty?": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML": {
+      "main": [
+        [
+          {
+            "node": "remove duplicate links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "remove duplicate links": {
+      "main": [
+        [
+          {
+            "node": "pause for safety",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pause for safety": {
+      "main": [
+        [
+          {
+            "node": "Visit product page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Visit product page": {
+      "main": [
+        [
+          {
+            "node": "read item details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Direct Links": {
+      "main": [
+        [
+          {
+            "node": "Do We Have Direct Links?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Do We Have Direct Links?": {
+      "main": [
+        [
+          {
+            "node": "Visit Direct Product Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Visit Direct Product Page": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Merge Amazon Products (Collection + Direct)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Amazon Products (Collection + Direct)": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate + Combine Final Amazon Product List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Category Key": {
+      "main": [
+        [
+          {
+            "node": "Fetch Instagram",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "fetch pintrest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "fetch blogs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "fetch market data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch market data": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch blogs": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "fetch pintrest": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Fetch Instagram": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Merge Social Data1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Image Analysis": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Social Data1": {
+      "main": [
+        [
+          {
+            "node": "Merge Image Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate + Combine Final Amazon Product List": {
+      "main": [
+        [
+          {
+            "node": "Merge All Data1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge All Data1": {
+      "main": [
+        [
+          {
+            "node": "Wait2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait2": {
+      "main": [
+        [
+          {
+            "node": "Judge Product Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Judge Product Category",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Judge Product Category": {
+      "main": [
+        [
+          {
+            "node": "Remove Invalid Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Invalid Products": {
+      "main": [
+        [
+          {
+            "node": "Standardize Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Standardize Details",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Standardize Details": {
+      "main": [
+        [
+          {
+            "node": "Save Standardized Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Standardized Data": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Identify Top Trends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Identify Top Trends",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Identify Top Trends": {
+      "main": [
+        [
+          {
+            "node": "Save Trend List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Trend List": {
+      "main": [
+        [
+          {
+            "node": "Split Segments For Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Segments For Images": {
+      "main": [
+        [
+          {
+            "node": "Check Segments Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Segments Exists": {
+      "main": [
+        [
+          {
+            "node": "Generate Image Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Image Prompt",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image Prompt": {
+      "main": [
+        [
+          {
+            "node": "Clean Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Prompt": {
+      "main": [
+        [
+          {
+            "node": "Generate Image (HuggingFace)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image (HuggingFace)": {
+      "main": [
+        [
+          {
+            "node": "Encode to Base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Encode to Base": {
+      "main": [
+        [
+          {
+            "node": "Collect All Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Images": {
+      "main": [
+        [
+          {
+            "node": "Blog Knowledge Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Blog Knowledge Extractor",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Blog Knowledge Extractor": {
+      "main": [
+        [
+          {
+            "node": "Parse Blog Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Blog Knowledge": {
+      "main": [
+        [
+          {
+            "node": "Scope Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scope Generator": {
+      "main": [
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "Executive Summary Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Executive Summary Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executive Summary Generator": {
+      "main": [
+        [
+          {
+            "node": "Wait3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait3": {
+      "main": [
+        [
+          {
+            "node": "Market Reserach Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Market Reserach Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Market Reserach Generator": {
+      "main": [
+        [
+          {
+            "node": "Wait4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait4": {
+      "main": [
+        [
+          {
+            "node": "Category Generator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Category Generator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Category Generator": {
+      "main": [
+        [
+          {
+            "node": "Wait5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait5": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model4": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Wait6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait6": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Wait7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait7": {
+      "main": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model6": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent2": {
+      "main": [
+        [
+          {
+            "node": "Wait8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait8": {
+      "main": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model7": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent3": {
+      "main": [
+        [
+          {
+            "node": "Collect All Sections",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect All Sections": {
+      "main": [
+        [
+          {
+            "node": "Assemble HTML Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble HTML Report": {
+      "main": [
+        [
+          {
+            "node": "Section Validator1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Section Validator1": {
+      "main": [
+        [
+          {
+            "node": "Create Download File1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Download File1": {
+      "main": [
+        [
+          {
+            "node": "HTML Preview1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "7178cd98-f3fd-4455-9418-27c5f5626ab1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "fc91245cd7fcfc8b9f4e523a36eabd0b3d2139cb00a01149609142bd61c25b96"
+  },
+  "id": "3QAyl5JgjxCcT10V",
+  "tags": []
+}
