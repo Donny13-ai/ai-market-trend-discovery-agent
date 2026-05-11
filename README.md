@@ -49,7 +49,7 @@ The system demonstrates how AI agents can be orchestrated across multiple workfl
 ## Demo
 
 Loom Walkthrough:
-[PASTE YOUR LOOM LINK]
+https://www.loom.com/share/1edf3389ebfe49fb80e05f660381b1e5
 
 ---
 <img width="960" height="564" alt="image" src="https://github.com/user-attachments/assets/154abae9-d190-48af-8781-7334e662176e" />
