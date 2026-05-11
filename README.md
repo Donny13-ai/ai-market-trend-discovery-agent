@@ -45,10 +45,11 @@ Loom Walkthrough:
 
 ---
 
-## Screenshots
+<img width="960" height="564" alt="image" src="https://github.com/user-attachments/assets/122c6f32-0e9b-41a2-afa5-5c3eb5e36764" />
 
-### Workflow Architecture
-![Workflow](screenshots/workflow.png)
+
+<img width="960" height="564" alt="image" src="https://github.com/user-attachments/assets/154abae9-d190-48af-8781-7334e662176e" />
+
 
 ### Final Report
 ![Report](screenshots/report.png)
